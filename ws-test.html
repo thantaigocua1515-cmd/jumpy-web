@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>WS test</title></head>
+<body>
+<h1>jumpy-relay live test</h1>
+<pre id="out">RUNNING...</pre>
+<script>
+  var out = [];
+  function log(s) { out.push(s); document.getElementById('out').textContent = out.join('\n'); }
+  var URL = 'wss://jumpy-production.up.railway.app/ws';
+  var results = {};
+  function client(name) {
+    return new Promise(function (resolve, reject) {
+      var ws = new WebSocket(URL);
+      var c = { name: name, ws: ws, success: null, proxyMsg: null };
+      ws.onmessage = function (ev) {
+        var m = JSON.parse(ev.data);
+        if (m.type === 'success') c.success = m;
+        if (m.type === 'proxy_msg') c.proxyMsg = m;
+      };
+      ws.onopen = function () { resolve(c); };
+      ws.onerror = function () { reject(new Error(name + ' ws error')); };
+    });
+  }
+  function waitFor(c, key, ms) {
+    return new Promise(function (resolve, reject) {
+      var t0 = Date.now();
+      var iv = setInterval(function () {
+        if (c[key]) { clearInterval(iv); resolve(c[key]); }
+        else if (Date.now() - t0 > ms) { clearInterval(iv); reject(new Error(c.name + ' timeout ' + key)); }
+      }, 50);
+    });
+  }
+  (async function () {
+    try {
+      var a = await client('A'); log('A connected');
+      var b = await client('B'); log('B connected');
+      a.ws.send(JSON.stringify({ type: 'request_matchmaking', game_id: 'jumpy', player_count: 2, match_data: '' }));
+      b.ws.send(JSON.stringify({ type: 'request_matchmaking', game_id: 'jumpy', player_count: 2, match_data: '' }));
+      var sa = await waitFor(a, 'success', 8000);
+      var sb = await waitFor(b, 'success', 8000);
+      log('matched: A idx=' + sa.player_idx + ' B idx=' + sb.player_idx);
+      log(sa.seed === sb.seed ? 'PASS same seed ' + sa.seed : 'FAIL seeds differ');
+      var payload = btoa('live-frame-test');
+      a.ws.send(JSON.stringify({ type: 'proxy', to: 'all', reliable: true, data: payload }));
+      var got = await waitFor(b, 'proxyMsg', 8000);
+      log(got.data === payload && got.from === sa.player_idx ? 'PASS proxy A->B delivered' : 'FAIL proxy data mismatch');
+      log('DONE');
+      document.title = 'WS TEST DONE';
+    } catch (e) {
+      log('ERROR ' + e.message);
+      document.title = 'WS TEST ERROR';
+    }
+  })();
+</script>
+</body>
+</html>
